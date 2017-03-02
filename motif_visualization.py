@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import math
+from matplotlib import patches
 
 
 def _adjacency_matrix(g, is_debug=False):
@@ -920,6 +921,63 @@ def _patch_node(xy, radius,
     return node
 
 
+def _cmp_motif(m1, m2):
+    """
+    Determine the order of two motifs.
+
+    Parameters:
+    -----------
+    m1, m2: list
+        Motifs.
+
+    Returns:
+    --------
+    int
+        0 means equal.
+        1 means m1 ranks before m2.
+        -1 means m1 ranks after m2.
+    """
+    f1 = len(m1['data'])
+    f2 = len(m2['data'])
+    n1 = len(m1['graph'].nodes())
+    n2 = len(m2['graph'].nodes())
+    if n1 < n2:
+        return 1
+    elif n1 > n2:
+        return -1
+    else:
+        if f1 > f2:
+            return 1
+        elif f1 < f2:
+            return -1
+        else:
+            return 0
+
+
+def _sort_motifs(motifs):
+    """
+    Sort motifs. Insertion sort.
+
+    Parameters:
+    -----------
+    motifs: list
+        Motifs.
+
+    Returns:
+    --------
+    sorted_motifs: list
+        Sorted motifs.
+    """
+    sorted_motifs = []
+    for m in motifs:
+        l = len(sorted_motifs)
+        i = 0
+        while (i < l) and (_cmp_motif(m, sorted_motifs[i]) < 1):
+            i += 1
+        sorted_motifs.insert(i, m)
+    return sorted_motifs
+
+
 def draw_motif(ax, g, w=1, r=0.1,
                center=(0, 0),
                center_node=None,
@@ -964,4 +1022,119 @@ def draw_motif(ax, g, w=1, r=0.1,
                                     w * r))
     for p in cpnt:
         ax.add_patch(p)
+    return ax, h
+
+
+def plot_motifs(motifs,
+                ax=None,
+                y_scale=1,
+                cmap=None,
+                motif_id=None,
+                txt=None):
+    """
+    Draw motifs.
+
+    Parameters:
+    -----------
+    motifs: list of dictionaries
+        Motifs.
+
+    y_scale: float
+        Scale for y axies (0, 1].
+        Defaults to be 1.
+
+    cmap: dictionary
+        Colormap for different motifs.
+
+    txt: str
+        Text to display under the plot.
+        Defaults to None.
+
+    Returns:
+    --------
+    ax: matplotlib.axes
+        Axis the motifs are drawn on.
+    """
+    n_motifs = len(motifs)  # number of motifs
+    if n_motifs == 0:
+        print(' No motif')
+        return ax
+
+    motifs = _sort_motifs(motifs)
+
+    # calculate freqency
+    freq = [len(d['data']) for d in motifs]
+    if ax is None:
+        # fig = plt.figure(figsize=(5 * 0.2 * n_motifs, 5))
+        fig = plt.figure()
+        ax = fig.add_subplot(1, 1, 1)
+
+    ax.set_xlim([0, n_motifs])
+    ax.set_ylim([0, 1])
+
+    # draw freqcency bar chart
+    # calculate freq percentage
+    sc = 1 / y_scale
+    sum_freq = sum(freq)
+    pct = [f / sum_freq for f in freq]
+    scaled_pct = [p * sc for p in pct]
+    w = 0.2 * 0.5  # bar width
+    o = (0.2 - 0.1) / 2  # bar offset
+    c = '#59A9C2'
+    for i in range(n_motifs):
+        p = patches.Rectangle((i * 0.2 + o, 0),  # lower left corner
+                              w,                 # width
+                              scaled_pct[i],     # height
+                              color=c)           # color
+        ax.add_patch(p)
+
+    # plot motif
+    w = 0.2
+    x = 0.5
+    y = 0.9
+    max_h = 0
+    for i in range(n_motifs):
+        ax, h = draw_motif(ax=ax,
+                           g=motifs[i]['graph'],
+                           w=w,
+                           center=(0.2 / 2 + i * 0.2, 0.9))
+        if h > max_h:
+            max_h = h
+
+    # plot lines to seperate different number of nodes
+    for i in range(n_motifs-1):
+        if len(motifs[i]['graph'].nodes()) != \
+           len(motifs[i+1]['graph'].nodes()):
+            ax.plot((i * 0.2 + 0.2, i * 0.2 + 0.2),
+                    (0, 1 + max_h * 0.5),
+                    color='k',
+                    linewidth=0.5,
+                    linestyle='--')
+
+    # configure figure
+    xticks = np.arange(0.1, (n_motifs + 1) * 0.2, 0.2)
+    xticklabels = np.arange(1, n_motifs + 1, 1)
+    ax.set_xticks(xticks)
+    if motif_id is not None:
+        xticklabels = []
+        for m in motifs:
+            for i in motif_id:
+                if nx.is_isomorphic(motif_id[i], m['graph']):
+                    l = i
+                    break
+            xticklabels.append(l)
+    ax.set_xticklabels(xticklabels)
+    ax.set_xlabel('Motif ID')
+    ax.set_xlim([-0.5, (n_motifs + 1) * 0.2 + 0.1])
+    ax.set_ylim([0, 1 + max_h * 0.5 + 0.1])
+    yticks = np.arange(0, 1.1, 0.1)
+    yticklabels = ['{}%'.format(int(x * 100)) for x in yticks]
+    yticks = [x * sc for x in yticks if x * sc <= 1]
+    ax.set_yticks(yticks)
+    ax.set_yticklabels(yticklabels[0:len(yticks)])
+    ax.set_ylabel('Motif frequency')
+    fig.set_size_inches(5 * 0.2 * n_motifs + 0.7, 5 * (1 + max_h * 0.5) + 0.1)
+    plt.axis('equal')
+    ax.grid(False)
+    ax.yaxis.grid(True)
     return ax
