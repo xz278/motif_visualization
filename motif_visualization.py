@@ -141,45 +141,42 @@ def _search_pos(am, em, ecm, pos,
         print()
         print('current assignment: {}'.format(curr_asgmt))
         print('remaining nodes: {}'.format(rem_nodes))
+        print('current crossing number: {}'.format(curr_cross_cnt))
+        print('max crossing count: {}'.format(max_cross_cnt))
 
     # base case
     if len(rem_nodes) == 0:
-        if is_debug:
-            print('=======\nbase case:')
-            print('best assignment: {}'.format(best_asgmt))
-            print('crossing edge: {}'.format(curr_cross_cnt))
         if curr_cross_cnt < max_cross_cnt:
             max_cross_cnt = curr_cross_cnt
             best_asgmt = curr_asgmt
         return list(best_asgmt), max_cross_cnt
 
     for next_node in rem_nodes:
-        if is_debug:
-            print('next node: {}'.format(next_node))
-        # new edges
         tmp_new_edges = []
         cnt_added = 0
         exceed_max = False
+
         # count number of new crossing edges
-        for exg_node in curr_asgmt:
+        for exg_node_idx in range(len(curr_asgmt)):
             # check if current two nodes are connected
+            exg_node = curr_asgmt[exg_node_idx]
+
             if (am[exg_node, next_node] == 1) or \
                (am[next_node, exg_node] == 1):
                 exg_new_edge = True
             else:
                 exg_new_edge = False
             if exg_new_edge:
-                new_edge = em[exg_node, next_node]
+                new_edge = em[exg_node_idx, len(curr_asgmt)]
                 # check crossing edge
                 for exg_edge in curr_edges:
                     if ecm[exg_edge, new_edge] == 1:
                         cnt_added += 1
-                        # if current number of crossing edges
-                        # exceeds current max, terminate searching
-                        # current branch
+
                         if curr_cross_cnt + cnt_added >= max_cross_cnt:
                             exceed_max = True
                             break
+
                 if exceed_max:
                     break
                 else:
@@ -316,6 +313,11 @@ def _rearrange_matrix(a):
         Adacency matrix.
     """
     n_nodes = len(a)
+    if n_nodes == 1:
+        return a
+    for i in range(n_nodes):
+        for j in range(n_nodes):
+            a[i, j] = int(a[i, j])
     degrees = _calculate_degree(a)
     node_id = list(range(n_nodes))
     sorted_list = sorted(node_id, key=lambda x: degrees[x], reverse=True)
@@ -943,8 +945,8 @@ def draw_motif(ax, g, w=1, r=0.1,
     # node positions, height of plot
     pos, h = _generate_node_pos(n_node, w=w, r=r, center=center)
     # adjacency matrix
-    # m = _adjacency_matrix(g)
-    m = nx.adjacency_matrix(g).todense()
+    am = nx.adjacency_matrix(g).todense()
+    m = _rearrange_matrix(a=am)
     if is_debug:
         print(m)
     # assign node positions to nodes
@@ -957,8 +959,8 @@ def draw_motif(ax, g, w=1, r=0.1,
         for j in range(i, n_node):
             cpnt.extend(_patch_edge(pos[i],
                                     pos[j],
-                                    m[i, j],
-                                    m[j, i],
+                                    m[asgmt[i], asgmt[j]],
+                                    m[asgmt[j], asgmt[i]],
                                     w * r))
     for p in cpnt:
         ax.add_patch(p)
