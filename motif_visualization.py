@@ -71,28 +71,43 @@ def _assign_node_pos(am, pos, is_debug=False):
     em, ep = _get_edge_matrix(n)
     # edge crossing matrix
     ecm = _edge_crossing_matrix(pos=pos, em=em, ep=ep)
-    node_pos, _ = _search_pos(am=am,
-                              em=em,
-                              ecm=ecm,
-                              pos=pos,
-                              curr_cross_cnt=0,
-                              curr_asgmt=[],
-                              curr_edges=[],
-                              rem_nodes=node_id,
-                              max_cross_cnt=len(ecm) ** 2,
-                              best_asgmt=node_id,
-                              is_debug=is_debug)
+    # edge angle matrix
+    eam = _edge_angle_matrix(pos=pos, em=em, ep=ep)
+    # search for assginment
+    r = _search_pos(am=am,
+                    em=em,
+                    ecm=ecm,
+                    eam=eam,
+                    pos=pos,
+                    curr_cross_cnt=0,
+                    curr_angle_cnt=0,
+                    curr_asgmt=[],
+                    curr_edges=[],
+                    rem_nodes=node_id,
+                    max_cross_cnt=len(ecm) ** 2,
+                    max_angle_cnt=len(ecm) ** 2,
+                    best_asgmt=node_id,
+                    angle_th=65,
+                    is_debug=False)
+    node_pos, goodness_cnt, search_info = r
+    if is_debug:
+        print('\nGoodness of crossing edges: {}'.format(goodness_cnt))
+        print('Search info: '.format(search_info))
     return node_pos
 
 
-def _search_pos(am, em, ecm, pos,
+def _search_pos(am, em, ecm, eam, pos,
                 curr_cross_cnt,
+                curr_angle_cnt,
                 curr_asgmt,
                 curr_edges,
                 rem_nodes,
                 max_cross_cnt,
+                max_angle_cnt,
                 best_asgmt,
-                is_debug=False):
+                angle_th=50,
+                is_debug=False,
+                run_info=[]):
     """
     Use depth-first-search to generate all
     possible node positions and corresponding
@@ -109,11 +124,22 @@ def _search_pos(am, em, ecm, pos,
     ecm: numpy.matrix
         Edge crossing matrix returned by _edge_crossing_matrix().
 
+    eam: numpy.matrix
+        Edge angle matrix returned by _edge_angle_matrix().
+
     pos: list
         List of positions for the nodes.
 
     curr_cross_cnt: int
         Current cross edge counts.
+
+    angle_th: float
+        The threshold angle (in degrees) between
+        two edges.
+        Defaults to 50 degree.
+
+    curr_angle_cnt: int
+        Number of angles that larger than the threshold.
 
     curr_asgmt: list
         Current node assignment.
@@ -127,6 +153,10 @@ def _search_pos(am, em, ecm, pos,
     max_cross_cnt: int
         Current largest cross edge count for any assignment.
 
+    curr_angle_cnt: int
+        The best number of angles that larger
+        than the threshold.
+
     best_asgmt: list
         Best position assigments.
 
@@ -135,8 +165,12 @@ def _search_pos(am, em, ecm, pos,
     best_asgmt: list
         Best position assigments.
 
-    max_cross_cnt: int
-        Current largest cross edge count for any assignment.
+    max_cnt: tuple
+        Goodness of the assignments.
+        (crossing edge count, small angle count)
+
+    run_info: list
+        Additional information abou the search.
     """
     if is_debug:
         print()
@@ -147,14 +181,43 @@ def _search_pos(am, em, ecm, pos,
 
     # base case
     if len(rem_nodes) == 0:
-        if curr_cross_cnt < max_cross_cnt:
-            max_cross_cnt = curr_cross_cnt
-            best_asgmt = curr_asgmt
-        return list(best_asgmt), max_cross_cnt
+        if curr_cross_cnt <= max_cross_cnt:
+            if curr_cross_cnt < max_cross_cnt:
+                max_cross_cnt = curr_cross_cnt
+                max_angle_cnt = curr_angle_cnt
+                best_asgmt = curr_asgmt
+            elif curr_angle_cnt < max_angle_cnt:
+                    max_cross_cnt = curr_cross_cnt
+                    max_angle_cnt = curr_angle_cnt
+                    best_asgmt = curr_asgmt
+        return list(best_asgmt), (max_cross_cnt, max_angle_cnt), run_info
 
-    for next_node in rem_nodes:
+    rem_nodes1 = []
+    rem_nodes2 = []
+    if len(curr_asgmt) == 0:
+        rem_nodes2 = list(rem_nodes)
+    else:
+        last_assign_node = curr_asgmt[-1]
+        for rem_n in rem_nodes:
+            if (am[last_assign_node, rem_n] == 1) or \
+               (am[rem_n, last_assign_node] == 1):
+                rem_nodes1.append(rem_n)
+            else:
+                rem_nodes2.append(rem_n)
+    rem_nodes1 = list(reversed(rem_nodes1))
+    rem_nodes2 = list(reversed(rem_nodes2))
+
+    angle_th = math.radians(angle_th)
+
+#     for next_node in rem_nodes:
+    for _ in rem_nodes:
+        if len(rem_nodes1) > 0:
+            next_node = rem_nodes1.pop()
+        else:
+            next_node = rem_nodes2.pop()
         tmp_new_edges = []
         cnt_added = 0
+        angle_cnt_added = 0
         exceed_max = False
 
         # count number of new crossing edges
@@ -173,39 +236,140 @@ def _search_pos(am, em, ecm, pos,
                 for exg_edge in curr_edges:
                     if ecm[exg_edge, new_edge] == 1:
                         cnt_added += 1
+                    if eam[exg_edge, new_edge] > angle_th:
+                        angle_cnt_added += 1
+                    tmp_cross_cnt = curr_cross_cnt + cnt_added
+                    tmp_angle_cnt = curr_angle_cnt + angle_cnt_added
 
-                        if curr_cross_cnt + cnt_added >= max_cross_cnt:
+                    if (tmp_cross_cnt >= max_cross_cnt):
+                        if tmp_cross_cnt > max_cross_cnt:
                             exceed_max = True
                             break
-
+                        elif tmp_angle_cnt >= max_angle_cnt:
+                            exceed_max = True
+                            break
                 if exceed_max:
                     break
-                else:
-                    tmp_new_edges.append(new_edge)
+                tmp_new_edges.append(new_edge)
+                curr_edges.append(new_edge)
         if exceed_max:
+            for e in tmp_new_edges:
+                curr_edges.remove(e)
             continue
         else:
             curr_asgmt.append(next_node)
             rem_nodes_copy = list(rem_nodes)
             rem_nodes_copy.remove(next_node)
             curr_edges.extend(tmp_new_edges)
-            best_asgmt, max_cross_cnt = _search_pos(am,
-                                                    em,
-                                                    ecm,
-                                                    pos,
-                                                    curr_cross_cnt + cnt_added,
-                                                    curr_asgmt,
-                                                    curr_edges,
-                                                    rem_nodes_copy,
-                                                    max_cross_cnt,
-                                                    best_asgmt,
-                                                    is_debug=is_debug)
-            if max_cross_cnt == 0:
-                return list(best_asgmt), max_cross_cnt
+            r = _search_pos(am,
+                            em,
+                            ecm,
+                            eam,
+                            pos,
+                            curr_cross_cnt + cnt_added,
+                            curr_angle_cnt + angle_cnt_added,
+                            curr_asgmt,
+                            curr_edges,
+                            rem_nodes_copy,
+                            max_cross_cnt,
+                            max_angle_cnt,
+                            best_asgmt,
+                            angle_th=angle_th,
+                            is_debug=is_debug)
+            best_asgmt, max_cnt, a_info = r
+            max_cross_cnt, max_angle_cnt = max_cnt
+            if (max_cross_cnt == 0) and (max_angle_cnt == 0):
+                return list(best_asgmt), (max_cross_cnt, max_angle_cnt), []
             curr_asgmt.pop()
             for _ in tmp_new_edges:
                 curr_edges.pop()
-    return list(best_asgmt), max_cross_cnt
+    return list(best_asgmt), (max_cross_cnt, max_angle_cnt), run_info
+
+
+def _compute_angle(e1, e2, ret_cos=True):
+    """
+    Compute the angle of the two lines.
+    The angle is in [0, 90] degrees.
+
+    Parameters:
+    -----------
+    e1, e2: list
+        Coordinates of the two lines.
+
+    ret_cos: bool
+        Whether return the cosine
+        of the angle.
+        Defaults to True.
+
+    Returns:
+    --------
+    a: float
+        Angle between the two lines.
+        Either the cosine value or radians.
+    """
+    # get the vector of the two line
+    xy1, xy2 = e1
+    x1, y1 = (xy2[0] - xy1[0], xy2[1] - xy1[1])
+    xy1, xy2 = e2
+    x2, y2 = (xy2[0] - xy1[0], xy2[1] - xy1[1])
+    cos_v = (x1 * x2 + y1 * y2) / \
+            (math.sqrt(x1 ** 2 + y1 ** 2) *
+             math.sqrt(x2 ** 2 + y2 ** 2))
+    if ret_cos:
+        a = abs(cos_v)
+    else:
+        a = math.acos(abs(cos_v))
+    return a
+
+
+def _edge_angle_matrix(pos, em=None, ep=None, is_debug=False):
+    """
+    Create an matrix storing the angle between two edges.
+
+    Parameters:
+    -----------
+    pos: list
+        Positions for nodes.
+        Returned by _generate_node_pos
+
+    em: numpy.matrix
+        Edge matrix, returned by _get_edge_matrix.
+        Defaults to None, in which case the matrix
+        is created using _get_edge_matrix().
+
+    em: dict
+        Endpoint matrix, returned by _get_edge_matrix.
+        Defaults to None, in which case the dictionary
+        is created using _get_edge_matrix().
+
+    Returns:
+    --------
+    eam: numpy.matrix
+        Edge crossing matrix.
+    """
+    n = len(pos)
+    if em is None:
+        em, ep = _get_edge_matrix(n)
+    ne = int(n * (n - 1) / 2)  # number of edges
+    eam = np.matrix(np.zeros(shape=(ne, ne), dtype=np.float16))
+    for i in range(ne):
+        for j in range(ne):
+            if i == j:
+                eam[i, j] = 1
+            elif i < j:
+                n1, n2 = ep[i]
+                e1 = (pos[n1], pos[n2])
+                n3, n4 = ep[j]
+                e2 = (pos[n3], pos[n4])
+                eam[i, j] = _compute_angle(e1, e2)
+                if is_debug and is_crossing:
+                    print(e1)
+                    print(e2)
+                    print(ema[i, j])
+                    print()
+            else:
+                eam[i, j] = eam[j, i]
+    return eam
 
 
 def _edge_crossing_matrix(pos, em=None, ep=None, is_debug=False):
@@ -978,9 +1142,10 @@ def _sort_motifs(motifs):
     return sorted_motifs
 
 
-def draw_motif(ax, g, w=1, r=0.1,
+def draw_motif(g, w=1, r=0.1,
                center=(0, 0),
                center_node=None,
+               ax=None,
                is_debug=False):
     """
     Draw a motif in an aesthetically legible way.
@@ -990,25 +1155,40 @@ def draw_motif(ax, g, w=1, r=0.1,
     g: networkx.DiGraph
         A directed graph representing the motif.
 
+    w: float
+        Width of the plot.
+
+    r: float
+        Radius of the node in motifs.
+
     center_node: str
         Center node.
+
+    ax: matplotlib.axes
+        The axes on which the motif is drawn.
 
     Returns:
     --------
     ax: matplotlib.axes
         The axes on which the motif is drawn.
     """
+    if ax is None:
+        fig = plt.figure()
+        ax = fig.add_subplot(1, 1, 1)
     # number of nodes
     n_node = len(g.nodes())
     # node positions, height of plot
     pos, h = _generate_node_pos(n_node, w=w, r=r, center=center)
     # adjacency matrix
+#     m = _adjacency_matrix(g)
     am = nx.adjacency_matrix(g).todense()
     m = _rearrange_matrix(a=am)
     if is_debug:
         print(m)
     # assign node positions to nodes
-    asgmt = _assign_node_pos(m, pos)
+    asgmt = _assign_node_pos(m, pos, is_debug=is_debug)
+    if is_debug:
+        print('final asgmt: {}'.format(asgmt))
     # draw motifs
     cpnt = []
     for p in pos:
