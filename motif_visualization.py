@@ -11,6 +11,83 @@ import math
 from matplotlib import patches
 
 
+def _get_connected_edge(pt, ep, curr_edges):
+    """
+    Find edges that are connected to the node.
+
+    Parameters:
+    -----------
+    pt: int
+        Point index.
+
+    ep: dict
+        Edges to end points dictionary, returned by _get_edge_matrix.
+        Defaults to None, in which case the dictionary
+        is created using _get_edge_matrix().
+
+    curr_edges: list
+        Current edges.
+
+    Returns:
+    --------
+    edges: list
+        Connected edges.
+    """
+    edges = []
+    for e in curr_edges:
+        p1, p2 = ep[e]
+        if pt == p1 or pt == p2:
+            edges.append(e)
+    return edges
+
+
+def _node_on_edge_matrix(pos, em=None, ep=None, is_debug=False):
+    """
+    Create an matrix storing whether a node is on an edge.
+
+    Parameters:
+    -----------
+    pos: list
+        Positions for nodes.
+        Returned by _generate_node_pos
+
+    em: numpy.matrix
+        Edge matrix, returned by _get_edge_matrix.
+        Defaults to None, in which case the matrix
+        is created using _get_edge_matrix().
+
+    ep: dict
+        Edges to end points dictionary, returned by _get_edge_matrix.
+        Defaults to None, in which case the dictionary
+        is created using _get_edge_matrix().
+
+    Returns:
+    --------
+    nem: numpy.matrix
+        Node on edge matrix.
+    """
+    n = len(pos)
+    ne = int(n * (n - 1) / 2)
+    if em is None:
+        em, ep = _get_edge_matrix(n)
+    nem = np.matrix(np.zeros(shape=(n, ne), dtype=np.float16))
+    for i in range(n):
+        for j in range(ne):
+            curr_ep = ep[j]
+            p1 = pos[curr_ep[0]]
+            p2 = pos[curr_ep[1]]
+            p = pos[i]
+            k, b = _get_line_para(p1, p2)
+            is_on_line = _is_on_line(p, k, b,
+                                     ep1=p1,
+                                     ep2=p2,
+                                     inc_endpoint=False,
+                                     is_debug=False)
+            if is_on_line:
+                nem[i, j] = 1
+    return nem
+
+
 def _adjacency_matrix(g, is_debug=False):
     """
     Create an adjacency matrix for given
@@ -63,8 +140,6 @@ def _assign_node_pos(am, pos, is_debug=False):
         in the underlying adjacency list.
     """
     n = len(am)
-#     if n == 1:
-#         return [0]
     node_id = list(range(n))
 
     # edge matrix, edge-to-node matrix
@@ -72,13 +147,19 @@ def _assign_node_pos(am, pos, is_debug=False):
     # edge crossing matrix
     ecm = _edge_crossing_matrix(pos=pos, em=em, ep=ep)
     # edge angle matrix
-    eam = _edge_angle_matrix(pos=pos, em=em, ep=ep)
+    eam = _edge_angle_matrix(pos=pos,
+                             em=em, ep=ep,
+                             use_degrees=True)
+    # node on edge matrix
+    nem = _node_on_edge_matrix(pos=pos, em=em, ep=ep)
     # search for assginment
     r = _search_pos(am=am,
                     em=em,
+                    ep=ep,
                     ecm=ecm,
                     eam=eam,
                     pos=pos,
+                    nem=nem,
                     curr_cross_cnt=0,
                     curr_angle_cnt=0,
                     curr_asgmt=[],
@@ -87,7 +168,7 @@ def _assign_node_pos(am, pos, is_debug=False):
                     max_cross_cnt=len(ecm) ** 2,
                     max_angle_cnt=len(ecm) ** 2,
                     best_asgmt=node_id,
-                    angle_th=65,
+                    angle_th=45,
                     is_debug=False)
     node_pos, goodness_cnt, search_info = r
     if is_debug:
@@ -96,7 +177,7 @@ def _assign_node_pos(am, pos, is_debug=False):
     return node_pos
 
 
-def _search_pos(am, em, ecm, eam, pos,
+def _search_pos(am, em, ep, ecm, eam, pos, nem,
                 curr_cross_cnt,
                 curr_angle_cnt,
                 curr_asgmt,
@@ -121,6 +202,11 @@ def _search_pos(am, em, ecm, eam, pos,
     em: numpy.matrix
         Edge matrix returned by _get_edge_matrix().
 
+    ep: dict
+        Edges to end points dictionary, returned by _get_edge_matrix.
+        Defaults to None, in which case the dictionary
+        is created using _get_edge_matrix().
+
     ecm: numpy.matrix
         Edge crossing matrix returned by _edge_crossing_matrix().
 
@@ -129,6 +215,9 @@ def _search_pos(am, em, ecm, eam, pos,
 
     pos: list
         List of positions for the nodes.
+
+    nem: numpy.matrix
+        Node on edge matrix.
 
     curr_cross_cnt: int
         Current cross edge counts.
@@ -185,11 +274,11 @@ def _search_pos(am, em, ecm, eam, pos,
             if curr_cross_cnt < max_cross_cnt:
                 max_cross_cnt = curr_cross_cnt
                 max_angle_cnt = curr_angle_cnt
-                best_asgmt = curr_asgmt
+                best_asgmt = list(curr_asgmt)
             elif curr_angle_cnt < max_angle_cnt:
                     max_cross_cnt = curr_cross_cnt
                     max_angle_cnt = curr_angle_cnt
-                    best_asgmt = curr_asgmt
+                    best_asgmt = list(curr_asgmt)
         return list(best_asgmt), (max_cross_cnt, max_angle_cnt), run_info
 
     rem_nodes1 = []
@@ -207,8 +296,6 @@ def _search_pos(am, em, ecm, eam, pos,
     rem_nodes1 = list(reversed(rem_nodes1))
     rem_nodes2 = list(reversed(rem_nodes2))
 
-    angle_th = math.radians(angle_th)
-
 #     for next_node in rem_nodes:
     for _ in rem_nodes:
         if len(rem_nodes1) > 0:
@@ -222,6 +309,13 @@ def _search_pos(am, em, ecm, eam, pos,
 
         # count number of new crossing edges
         for exg_node_idx in range(len(curr_asgmt)):
+            connected_edges = _get_connected_edge(pt=len(curr_asgmt),
+                                                  ep=ep,
+                                                  curr_edges=curr_edges)
+            connected_edges2 = _get_connected_edge(pt=exg_node_idx,
+                                                   ep=ep,
+                                                   curr_edges=curr_edges)
+            connected_edges.extend(connected_edges2)
             # check if current two nodes are connected
             exg_node = curr_asgmt[exg_node_idx]
 
@@ -236,8 +330,10 @@ def _search_pos(am, em, ecm, eam, pos,
                 for exg_edge in curr_edges:
                     if ecm[exg_edge, new_edge] == 1:
                         cnt_added += 1
-                    if eam[exg_edge, new_edge] > angle_th:
+                    if (exg_edge in connected_edges) and \
+                       (eam[exg_edge, new_edge] < angle_th):
                         angle_cnt_added += 1
+
                     tmp_cross_cnt = curr_cross_cnt + cnt_added
                     tmp_angle_cnt = curr_angle_cnt + angle_cnt_added
 
@@ -248,10 +344,19 @@ def _search_pos(am, em, ecm, eam, pos,
                         elif tmp_angle_cnt >= max_angle_cnt:
                             exceed_max = True
                             break
+
+#                 check if any nodes is on the edge
+                if not exceed_max:
+                    for node_idx2 in range(len(am)):
+                        if nem[node_idx2, new_edge] == 1:
+                            exceed_max = True
+                            break
+
                 if exceed_max:
                     break
-                tmp_new_edges.append(new_edge)
-                curr_edges.append(new_edge)
+                else:
+                    tmp_new_edges.append(new_edge)
+                    curr_edges.append(new_edge)
         if exceed_max:
             for e in tmp_new_edges:
                 curr_edges.remove(e)
@@ -260,16 +365,17 @@ def _search_pos(am, em, ecm, eam, pos,
             curr_asgmt.append(next_node)
             rem_nodes_copy = list(rem_nodes)
             rem_nodes_copy.remove(next_node)
-            curr_edges.extend(tmp_new_edges)
             r = _search_pos(am,
                             em,
+                            ep,
                             ecm,
                             eam,
                             pos,
+                            nem,
                             curr_cross_cnt + cnt_added,
                             curr_angle_cnt + angle_cnt_added,
-                            curr_asgmt,
-                            curr_edges,
+                            list(curr_asgmt),
+                            list(curr_edges),
                             rem_nodes_copy,
                             max_cross_cnt,
                             max_angle_cnt,
@@ -281,8 +387,8 @@ def _search_pos(am, em, ecm, eam, pos,
             if (max_cross_cnt == 0) and (max_angle_cnt == 0):
                 return list(best_asgmt), (max_cross_cnt, max_angle_cnt), []
             curr_asgmt.pop()
-            for _ in tmp_new_edges:
-                curr_edges.pop()
+            for e in tmp_new_edges:
+                curr_edges.remove(e)
     return list(best_asgmt), (max_cross_cnt, max_angle_cnt), run_info
 
 
@@ -318,11 +424,16 @@ def _compute_angle(e1, e2, ret_cos=True):
     if ret_cos:
         a = abs(cos_v)
     else:
+        cos_v = abs(cos_v)
+        if cos_v > 1:
+            cos_v = 1
         a = math.acos(abs(cos_v))
     return a
 
 
-def _edge_angle_matrix(pos, em=None, ep=None, is_debug=False):
+def _edge_angle_matrix(pos, em=None, ep=None,
+                       is_debug=False,
+                       use_degrees=False):
     """
     Create an matrix storing the angle between two edges.
 
@@ -342,6 +453,10 @@ def _edge_angle_matrix(pos, em=None, ep=None, is_debug=False):
         Defaults to None, in which case the dictionary
         is created using _get_edge_matrix().
 
+    use_degrees: bool
+        Whether convert angle into degrees.
+        Defaults to False.
+
     Returns:
     --------
     eam: numpy.matrix
@@ -355,13 +470,15 @@ def _edge_angle_matrix(pos, em=None, ep=None, is_debug=False):
     for i in range(ne):
         for j in range(ne):
             if i == j:
-                eam[i, j] = 1
+                eam[i, j] = 0
             elif i < j:
                 n1, n2 = ep[i]
                 e1 = (pos[n1], pos[n2])
                 n3, n4 = ep[j]
                 e2 = (pos[n3], pos[n4])
-                eam[i, j] = _compute_angle(e1, e2)
+                eam[i, j] = _compute_angle(e1, e2, ret_cos=False)
+                if use_degrees:
+                    eam[i, j] = np.degrees(eam[i, j])
                 if is_debug and is_crossing:
                     print(e1)
                     print(e2)
@@ -956,8 +1073,8 @@ def _patch_edge(xy1, xy2, dir1, dir2, radius):
         beta_radians = alpha_radians + math.pi / 2
         sin_beta = math.sin(beta_radians)
         cos_beta = math.cos(beta_radians)
-        xoffset2 = radius * 0.5 * cos_beta
-        yoffset2 = radius * 0.5 * sin_beta
+        xoffset2 = radius * 0.35 * cos_beta
+        yoffset2 = radius * 0.35 * sin_beta
 
         # create arrow patches
         dx1 = xy2[0] - xy1[0] - xoffset * 2
@@ -1142,7 +1259,9 @@ def _sort_motifs(motifs):
     return sorted_motifs
 
 
-def draw_motif(g, w=1, r=0.1,
+def draw_motif(g,
+               w=1,
+               r=0.1,
                center=(0, 0),
                center_node=None,
                ax=None,
@@ -1180,19 +1299,29 @@ def draw_motif(g, w=1, r=0.1,
     # node positions, height of plot
     pos, h = _generate_node_pos(n_node, w=w, r=r, center=center)
     # adjacency matrix
-#     m = _adjacency_matrix(g)
+    # m = _adjacency_matrix(g)
     am = nx.adjacency_matrix(g).todense()
     m = _rearrange_matrix(a=am)
-    if is_debug:
-        print(m)
     # assign node positions to nodes
     asgmt = _assign_node_pos(m, pos, is_debug=is_debug)
     if is_debug:
         print('final asgmt: {}'.format(asgmt))
     # draw motifs
     cpnt = []
+    # nodes
     for p in pos:
         cpnt.append(_patch_node(xy=p, radius=w * r))
+    # add node id
+    if is_debug:
+        c = 0
+        for p in pos:
+            ax.text(p[0], p[1], str(c),
+                    horizontalalignment='center',
+                    verticalalignment='center',
+                    fontsize=20, color='w')
+            c += 1
+
+    # edges
     for i in range(n_node - 1):
         for j in range(i, n_node):
             cpnt.extend(_patch_edge(pos[i],
@@ -1200,6 +1329,20 @@ def draw_motif(g, w=1, r=0.1,
                                     m[asgmt[i], asgmt[j]],
                                     m[asgmt[j], asgmt[i]],
                                     w * r))
+    # edge id
+    if is_debug:
+        em, ep = _get_edge_matrix(len(am))
+        for i in range(n_node - 1):
+            for j in range(i, n_node):
+                if (m[asgmt[i], asgmt[j]] == 1) or \
+                   (m[asgmt[j], asgmt[i]] == 1):
+                    d = em[i, j]
+                    x = (pos[i][0] + pos[j][0]) / 2
+                    y = (pos[i][1] + pos[j][1]) / 2
+                    ax.text(x, y, str(d),
+                            horizontalalignment='center',
+                            verticalalignment='center',
+                            fontsize=20, color='k')
     for p in cpnt:
         ax.add_patch(p)
     return ax, h
